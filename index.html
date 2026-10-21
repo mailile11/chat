@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Mesh Group Chat with Interactive Screen Share & Passkey</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PeerJS CDN -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            500: '#0284c7',
+                            600: '#0369a1',
+                            700: '#075985',
+                            900: '#0c4a6e'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(15, 23, 42, 0.6);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(51, 65, 85, 0.8);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(71, 85, 105, 1);
+        }
+
+        /* Pulse animation for click beacons */
+        @keyframes click-ripple {
+            0% { transform: scale(0.2); opacity: 1; }
+            100% { transform: scale(2.5); opacity: 0; }
+        }
+        .animate-click-ripple {
+            animation: click-ripple 0.8s ease-out forwards;
+        }
+
+        /* Video element sizing */
+        .video-container video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background-color: #020617;
+        }
+
+        /* Fullscreen styles for card elements */
+        .video-card-fullscreen {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: none !important;
+            max-height: none !important;
+            border-radius: 0 !important;
+            background-color: #000 !important;
+            position: fixed !important;
+            inset: 0 !important;
+            z-index: 9999 !important;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans h-screen overflow-hidden flex flex-col justify-between">
+
+    <!-- ==================== SECURITY GATE / PASSKEY MODAL ==================== -->
+    <div id="login-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/95 backdrop-blur-md p-4 transition-all duration-300">
+        <div class="bg-slate-900 border-2 border-slate-700 p-8 rounded-2xl shadow-2xl max-w-md w-full text-center relative">
+            <div class="w-16 h-16 bg-blue-600/20 text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-500/30">
+                <i class="fa-solid fa-lock text-3xl"></i>
+            </div>
+            <h1 class="text-2xl font-bold mb-2 text-white">Enter Access Passkey</h1>
+            <p class="text-slate-400 text-sm mb-6">This room is protected. Please enter the 4-digit passcode to enter the group chat.</p>
+            
+            <form id="passcode-form" onsubmit="event.preventDefault(); handlePasscodeSubmit();" class="space-y-4">
+                <div class="relative">
+                    <input 
+                        type="password" 
+                        id="passcode-input" 
+                        maxlength="10"
+                        placeholder="Enter passcode (e.g. 9736)" 
+                        autofocus
+                        class="w-full px-4 py-3 bg-slate-800 text-slate-100 placeholder-slate-500 rounded-xl border-2 border-slate-700 focus:border-blue-500 focus:outline-none text-center text-xl font-mono tracking-widest transition-colors"
+                    >
+                </div>
+
+                <div id="passcode-error" class="hidden text-rose-400 text-sm font-medium bg-rose-950/50 border border-rose-800/60 rounded-lg py-2 px-3 flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span id="passcode-error-text">Incorrect passcode. Try again.</span>
+                </div>
+
+                <button 
+                    type="submit" 
+                    id="passcode-submit-btn"
+                    class="w-full py-3.5 px-6 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 text-base cursor-pointer"
+                >
+                    <span>Unlock Chat</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </form>
+
+            <div class="mt-6 pt-4 border-t border-slate-800/80 text-xs text-slate-500">
+                Peer-to-Peer Encrypted Mesh Network
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== MAIN CHAT APPLICATION UI ==================== -->
+    <div id="app-container" class="flex-1 flex flex-col h-full overflow-hidden opacity-30 pointer-events-none transition-opacity duration-300">
+        
+        <!-- TOP HEADER NAVBAR -->
+        <header class="bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center justify-between z-10 shrink-0">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-md">
+                    <i class="fa-solid fa-comments"></i>
+                </div>
+                <div>
+                    <h1 class="text-base font-bold text-white leading-tight flex items-center gap-2">
+                        P2P Mesh Room
+                        <span id="lock-badge" class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs px-2 py-0.5 rounded-full font-normal flex items-center gap-1">
+                            <i class="fa-solid fa-shield-halved text-[10px]"></i> Unlocked
+                        </span>
+                    </h1>
+                    <p class="text-xs text-slate-400 flex items-center space-x-2">
+                        <span id="connection-status-dot" class="w-2 h-2 rounded-full bg-amber-500 inline-block animate-pulse"></span>
+                        <span id="connection-status-text">Connecting to mesh network...</span>
+                    </p>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-2">
+                <!-- Connected Peers Badge -->
+                <div class="bg-slate-800 border border-slate-700 px-3 py-1.5 rounded-lg flex items-center space-x-2 text-xs font-medium">
+                    <i class="fa-solid fa-users text-blue-400"></i>
+                    <span>Peers: <strong id="peer-count" class="text-white">1</strong></span>
+                </div>
+
+                <!-- Call Control Buttons -->
+                <button id="voice-call-btn" onclick="toggleVoiceCall()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition" title="Start Voice Call">
+                    <i class="fa-solid fa-phone text-emerald-400"></i>
+                    <span class="hidden sm:inline">Voice</span>
+                </button>
+                <button id="video-call-btn" onclick="toggleVideoCall()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition" title="Start Video Call">
+                    <i class="fa-solid fa-video text-blue-400"></i>
+                    <span class="hidden sm:inline">Video</span>
+                </button>
+                <button id="screen-share-btn" onclick="toggleScreenShare()" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition" title="Share Screen">
+                    <i class="fa-solid fa-desktop text-purple-400"></i>
+                    <span class="hidden sm:inline">Share Screen</span>
+                </button>
+
+                <!-- Profile Modal Trigger -->
+                <button onclick="toggleProfileModal()" class="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 transition" title="Settings">
+                    <i class="fa-solid fa-user-gear"></i>
+                </button>
+                <button onclick="relockApp()" class="w-9 h-9 rounded-lg bg-rose-950/40 border border-rose-800/50 text-rose-400 hover:bg-rose-900/60 transition flex items-center justify-center" title="Lock App">
+                    <i class="fa-solid fa-lock"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- PIP ASSISTANT CANVAS (Hidden background renderer for PiP floating window) -->
+        <canvas id="pip-canvas" class="hidden" width="1280" height="720"></canvas>
+        <video id="pip-video-source" class="hidden" autoplay playsinline muted></video>
+
+        <!-- FLOATING PIP ASSISTANT CONTROLLER (Shows when screen sharing) -->
+        <div id="pip-banner" class="hidden bg-purple-900/80 border-b border-purple-500 px-4 py-2 text-xs flex items-center justify-between text-purple-100 z-20">
+            <div class="flex items-center space-x-2">
+                <i class="fa-solid fa-display animate-pulse text-purple-300"></i>
+                <span>You are currently sharing your screen.</span>
+            </div>
+            <button onclick="launchPipOverlay()" class="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded-md font-semibold flex items-center space-x-1 shadow transition">
+                <i class="fa-solid fa-up-right-from-square"></i>
+                <span>Launch Floating Click Assistant (PiP Overlay)</span>
+            </button>
+        </div>
+
+        <!-- CALL MEDIA STREAMS GRID AREA -->
+        <div id="media-grid-container" class="hidden bg-slate-950 border-b border-slate-800 p-3 overflow-x-auto">
+            <div id="media-grid" class="flex flex-wrap gap-3 max-h-[45vh] overflow-y-auto">
+                <!-- Video cards will be injected dynamically -->
+            </div>
+        </div>
+
+        <!-- MESSAGES CONTAINER -->
+        <main id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-950">
+            <!-- System Welcome Message -->
+            <div class="flex justify-center my-2">
+                <div class="bg-slate-900/80 border border-slate-800/80 text-slate-400 text-xs px-4 py-2 rounded-full flex items-center space-x-2">
+                    <i class="fa-solid fa-shield-halved text-blue-400"></i>
+                    <span>Connected to decentralised peer mesh room. Passkey verified.</span>
+                </div>
+            </div>
+        </main>
+
+        <!-- TYPING INDICATOR AREA -->
+        <div id="typing-indicator" class="px-4 py-1 text-xs text-slate-400 italic h-5 flex items-center space-x-1 opacity-0 transition-opacity">
+            <span id="typing-username">Someone</span> is typing
+            <span class="inline-flex space-x-0.5 ml-1">
+                <span class="w-1 h-1 bg-slate-400 rounded-full dot-1"></span>
+                <span class="w-1 h-1 bg-slate-400 rounded-full dot-2"></span>
+                <span class="w-1 h-1 bg-slate-400 rounded-full dot-3"></span>
+            </span>
+        </div>
+
+        <!-- CHAT INPUT BAR -->
+        <footer class="bg-slate-900 border-t border-slate-800 p-3 shrink-0">
+            <form id="message-form" onsubmit="event.preventDefault(); sendMessage();" class="flex items-center space-x-2">
+                <input 
+                    type="text" 
+                    id="message-input" 
+                    placeholder="Type a message to all connected peers..." 
+                    oninput="handleTypingNotification()"
+                    autocomplete="off"
+                    class="flex-1 bg-slate-800 text-slate-100 placeholder-slate-500 px-4 py-2.5 rounded-xl border border-slate-700 focus:outline-none focus:border-blue-500 transition text-sm"
+                >
+                <button 
+                    type="submit" 
+                    class="bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-semibold shadow transition flex items-center space-x-2 text-sm cursor-pointer"
+                >
+                    <span>Send</span>
+                    <i class="fa-solid fa-paper-plane text-xs"></i>
+                </button>
+            </form>
+        </footer>
+
+    </div>
+
+    <!-- USER PROFILE MODAL -->
+    <div id="profile-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+        <div class="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-sm w-full space-y-4">
+            <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-user-pen text-blue-400"></i> Edit Profile
+            </h2>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">Display Name</label>
+                <input type="text" id="username-input" class="w-full bg-slate-800 border border-slate-700 px-3 py-2 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">Avatar Color</label>
+                <div class="flex space-x-2" id="color-picker-container">
+                    <!-- Dynamic color badges -->
+                </div>
+            </div>
+            <div class="flex justify-end space-x-2 pt-2">
+                <button onclick="toggleProfileModal()" class="px-4 py-2 bg-slate-800 text-slate-300 rounded-lg text-xs font-semibold hover:bg-slate-700">Cancel</button>
+                <button onclick="saveProfile()" class="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-500">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- AUDIO NOTIFICATION SOUND SYNTHESIZER -->
+    <script>
+        // WEB AUDIO CHIME SYNTHESIZER
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playChimeSound() {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+            osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.15); // A5
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.3);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }
+
+        function playClickPing() {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.1);
+            gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+    </script>
+
+    <!-- MAIN APP JAVASCRIPT LOGIC -->
+    <script>
+        // CONSTANTS & STATE
+        const PASSCODE = "9736";
+        const ROOM_PREFIX = "p2p-groupchat-mesh-v2-room-";
+        let isUnlocked = false;
+
+        // User profile configuration
+        let currentUser = {
+            id: 'user-' + Math.random().toString(36).substring(2, 9),
+            name: 'Peer-' + Math.floor(1000 + Math.random() * 9000),
+            color: '#0284c7'
+        };
+
+        const AVATAR_COLORS = ['#0284c7', '#059669', '#d97706', '#7c3aed', '#db2777', '#ea580c'];
+
+        // PeerJS & Mesh Tracking
+        let peer = null;
+        let connections = {}; // peerId -> DataConnection
+        let activeCalls = {}; // peerId -> MediaConnection
+        let seenMessageIds = new Set();
+
+        // Media Stream State
+        let localStream = null;
+        let screenStream = null;
+        let isVoiceActive = false;
+        let isVideoActive = false;
+        let isScreenActive = false;
+
+        // PiP Floating Pointer Engine
+        let pipVideoEl = null;
+        let pipCanvasEl = null;
+        let pipCtx = null;
+        let activeClickBeacons = []; // Active beacons to render on screen share
+
+        // INITIALIZATION
+        window.addEventListener('DOMContentLoaded', () => {
+            setupColorPicker();
+            checkSavedAuth();
+            
+            // Allow press enter key on passcode input
+            document.getElementById('passcode-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    handlePasscodeSubmit();
+                }
+            });
+        });
+
+        // PASSKEY AUTHENTICATION LOGIC
+        function handlePasscodeSubmit() {
+            const input = document.getElementById('passcode-input');
+            const errorDiv = document.getElementById('passcode-error');
+            const errorText = document.getElementById('passcode-error-text');
+            const enteredPasscode = input.value.trim();
+
+            if (enteredPasscode === PASSCODE) {
+                // Success
+                errorDiv.classList.add('hidden');
+                unlockApplication();
+            } else {
+                // Error
+                errorDiv.classList.remove('hidden');
+                errorText.innerText = "Incorrect passcode. Please enter 9736.";
+                input.value = "";
+                input.focus();
+            }
+        }
+
+        function unlockApplication() {
+            isUnlocked = true;
+            sessionStorage.setItem('p2p_passcode_unlocked', 'true');
+            
+            const loginModal = document.getElementById('login-modal');
+            const appContainer = document.getElementById('app-container');
+
+            loginModal.classList.add('opacity-0', 'pointer-events-none');
+            setTimeout(() => {
+                loginModal.classList.add('hidden');
+            }, 300);
+
+            appContainer.classList.remove('opacity-30', 'pointer-events-none');
+            appContainer.classList.add('opacity-100');
+
+            // Initialize PeerJS mesh
+            initPeerJS();
+        }
+
+        function checkSavedAuth() {
+            if (sessionStorage.getItem('p2p_passcode_unlocked') === 'true') {
+                unlockApplication();
+            } else {
+                // Force focus on passcode input
+                setTimeout(() => {
+                    document.getElementById('passcode-input').focus();
+                }, 100);
+            }
+        }
+
+        function relockApp() {
+            sessionStorage.removeItem('p2p_passcode_unlocked');
+            window.location.reload();
+        }
+
+        // PEERJS MESH CONNECTOR
+        function initPeerJS() {
+            // Generate peer ID or join room peer list
+            peer = new Peer(currentUser.id, {
+                debug: 1
+            });
+
+            peer.on('open', (id) => {
+                console.log('Registered Peer ID:', id);
+                updateConnectionStatus('Connected to mesh', true);
+                discoverAndConnectPeers();
+            });
+
+            peer.on('connection', (conn) => {
+                setupDataConnection(conn);
+            });
+
+            peer.on('call', (call) => {
+                handleIncomingCall(call);
+            });
+
+            peer.on('error', (err) => {
+                console.error('PeerJS Error:', err);
+                updateConnectionStatus('Network warning: ' + err.type, false);
+            });
+        }
+
+        function updateConnectionStatus(text, isGood) {
+            const dot = document.getElementById('connection-status-dot');
+            const label = document.getElementById('connection-status-text');
+            label.innerText = text;
+            if (isGood) {
+                dot.className = "w-2 h-2 rounded-full bg-emerald-500 inline-block";
+            } else {
+                dot.className = "w-2 h-2 rounded-full bg-amber-500 inline-block animate-pulse";
+            }
+        }
+
+        // DISCOVER PEERS IN THE PUBLIC ROOM MESH
+        function discoverAndConnectPeers() {
+            // Send broadcast announcement request
+            broadcastData({
+                type: 'PEER_ANNOUNCE',
+                user: currentUser
+            });
+
+            updatePeerCount();
+        }
+
+        function setupDataConnection(conn) {
+            connections[conn.peer] = conn;
+
+            conn.on('open', () => {
+                updatePeerCount();
+                // Send profile greeting packet
+                conn.send({
+                    type: 'PROFILE_INFO',
+                    user: currentUser
+                });
+            });
+
+            conn.on('data', (data) => {
+                handleIncomingData(data, conn.peer);
+            });
+
+            conn.on('close', () => {
+                delete connections[conn.peer];
+                removePeerMedia(conn.peer);
+                updatePeerCount();
+            });
+
+            conn.on('error', () => {
+                delete connections[conn.peer];
+                updatePeerCount();
+            });
+        }
+
+        function updatePeerCount() {
+            const count = Object.keys(connections).length + 1;
+            document.getElementById('peer-count').innerText = count;
+        }
+
+        // INCOMING DATA PACKET ROUTER
+        function handleIncomingData(data, fromPeerId) {
+            if (!data || !data.type) return;
+
+            switch (data.type) {
+                case 'CHAT_MESSAGE':
+                    if (seenMessageIds.has(data.id)) return; // Prevent duplicate relay loops
+                    seenMessageIds.add(data.id);
+                    
+                    renderChatMessage(data);
+                    playChimeSound();
+
+                    // Mesh Relay to other connected peers
+                    relayDataToOthers(data, fromPeerId);
+                    break;
+
+                case 'TYPING_INDICATOR':
+                    showTypingIndicator(data.user.name);
+                    break;
+
+                case 'PROFILE_INFO':
+                    // Update user peer metadata
+                    break;
+
+                case 'REMOTE_CLICK':
+                    // Trigger click beacon on target screen share
+                    handleRemoteClickBeacon(data);
+                    playClickPing();
+                    break;
+            }
+        }
+
+        function relayDataToOthers(data, sourcePeerId) {
+            Object.keys(connections).forEach(peerId => {
+                if (peerId !== sourcePeerId && connections[peerId].open) {
+                    connections[peerId].send(data);
+                }
+            });
+        }
+
+        function broadcastData(data) {
+            Object.values(connections).forEach(conn => {
+                if (conn.open) {
+                    conn.send(data);
+                }
+            });
+        }
+
+        // CHAT MESSAGING
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            if (!text) return;
+
+            const msgId = currentUser.id + '-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+            seenMessageIds.add(msgId);
+
+            const msgData = {
+                type: 'CHAT_MESSAGE',
+                id: msgId,
+                user: currentUser,
+                text: text,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
+
+            renderChatMessage(msgData, true);
+            broadcastData(msgData);
+
+            input.value = '';
+        }
+
+        function renderChatMessage(msg, isSelf = false) {
+            const container = document.getElementById('chat-messages');
+            const msgEl = document.createElement('div');
+            msgEl.className = `flex flex-col ${isSelf ? 'items-end' : 'items-start'} my-2`;
+
+            const initial = (msg.user.name || 'P').charAt(0).toUpperCase();
+
+            msgEl.innerHTML = `
+                <div class="flex items-end space-x-2 max-w-[85%] ${isSelf ? 'flex-row-reverse space-x-reverse' : 'flex-row'}">
+                    <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 shadow" style="background-color: ${msg.user.color}">
+                        ${initial}
+                    </div>
+                    <div class="rounded-2xl px-4 py-2.5 ${isSelf ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-100 border border-slate-700/80 rounded-bl-none'}">
+                        ${!isSelf ? `<div class="text-[11px] font-bold text-slate-400 mb-0.5">${escapeHtml(msg.user.name)}</div>` : ''}
+                        <div class="text-sm break-words">${escapeHtml(msg.text)}</div>
+                    </div>
+                </div>
+                <div class="text-[10px] text-slate-500 mt-1 px-9">
+                    ${msg.timestamp}
+                </div>
+            `;
+
+            container.appendChild(msgEl);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        let typingTimeout = null;
+        function handleTypingNotification() {
+            broadcastData({
+                type: 'TYPING_INDICATOR',
+                user: currentUser
+            });
+        }
+
+        function showTypingIndicator(username) {
+            const el = document.getElementById('typing-indicator');
+            const nameEl = document.getElementById('typing-username');
+            nameEl.innerText = username;
+            el.classList.remove('opacity-0');
+
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                el.classList.add('opacity-0');
+            }, 2000);
+        }
+
+        // VOICE / VIDEO / SCREEN SHARE MEDIA CALLS
+        async function toggleVoiceCall() {
+            const btn = document.getElementById('voice-call-btn');
+            if (isVoiceActive) {
+                stopLocalMedia();
+                btn.className = "px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition";
+                isVoiceActive = false;
+            } else {
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    isVoiceActive = true;
+                    btn.className = "px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow transition";
+                    callAllPeers(localStream);
+                } catch (e) {
+                    alert('Microphone access denied or unavailable.');
+                }
+            }
+        }
+
+        async function toggleVideoCall() {
+            const btn = document.getElementById('video-call-btn');
+            if (isVideoActive) {
+                stopLocalMedia();
+                btn.className = "px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition";
+                isVideoActive = false;
+            } else {
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                    isVideoActive = true;
+                    btn.className = "px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow transition";
+                    renderMediaCard(currentUser.id, currentUser.name, localStream, true);
+                    callAllPeers(localStream);
+                } catch (e) {
+                    alert('Camera/Microphone access denied.');
+                }
+            }
+        }
+
+        async function toggleScreenShare() {
+            const btn = document.getElementById('screen-share-btn');
+            const pipBanner = document.getElementById('pip-banner');
+
+            if (isScreenActive) {
+                stopScreenShare();
+                btn.className = "px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition";
+                pipBanner.classList.add('hidden');
+                isScreenActive = false;
+            } else {
+                try {
+                    screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+                    isScreenActive = true;
+                    btn.className = "px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow transition";
+                    pipBanner.classList.remove('hidden');
+
+                    renderMediaCard(currentUser.id + '-screen', currentUser.name + ' (Screen)', screenStream, true, true);
+                    callAllPeers(screenStream);
+
+                    // Track when user stops sharing via browser bar
+                    screenStream.getVideoTracks()[0].onended = () => {
+                        stopScreenShare();
+                        btn.className = "px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold flex items-center space-x-1.5 border border-slate-700 transition";
+                        pipBanner.classList.add('hidden');
+                        isScreenActive = false;
+                    };
+                } catch (e) {
+                    console.log('Screen share cancelled');
+                }
+            }
+        }
+
+        function stopLocalMedia() {
+            if (localStream) {
+                localStream.getTracks().forEach(t => t.stop());
+                localStream = null;
+            }
+            removePeerMedia(currentUser.id);
+        }
+
+        function stopScreenShare() {
+            if (screenStream) {
+                screenStream.getTracks().forEach(t => t.stop());
+                screenStream = null;
+            }
+            removePeerMedia(currentUser.id + '-screen');
+        }
+
+        function callAllPeers(stream) {
+            Object.keys(connections).forEach(peerId => {
+                const call = peer.call(peerId, stream);
+                setupMediaCall(call);
+            });
+        }
+
+        function handleIncomingCall(call) {
+            call.answer(localStream || screenStream || null);
+            setupMediaCall(call);
+        }
+
+        function setupMediaCall(call) {
+            activeCalls[call.peer] = call;
+
+            call.on('stream', (remoteStream) => {
+                const isScreen = call.metadata && call.metadata.isScreen;
+                renderMediaCard(call.peer, 'Peer-' + call.peer.substr(0, 4), remoteStream, false, isScreen);
+            });
+
+            call.on('close', () => {
+                removePeerMedia(call.peer);
+            });
+        }
+
+        // MEDIA STREAM CARD & INTERACTIVE OVERLAY
+        function renderMediaCard(id, title, stream, isSelf = false, isScreen = false) {
+            const container = document.getElementById('media-grid-container');
+            const grid = document.getElementById('media-grid');
+            container.classList.remove('hidden');
+
+            let card = document.getElementById(`video-card-${id}`);
+            if (!card) {
+                card = document.createElement('div');
+                card.id = `video-card-${id}`;
+                card.className = "relative bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex-1 min-w-[280px] max-w-[480px] h-[240px] flex flex-col group";
+
+                card.innerHTML = `
+                    <div class="absolute top-2 left-2 z-20 bg-slate-950/80 backdrop-blur-md px-2.5 py-1 rounded-md text-xs font-semibold text-slate-200 flex items-center space-x-1.5 border border-slate-800">
+                        <i class="${isScreen ? 'fa-solid fa-desktop text-purple-400' : 'fa-solid fa-video text-blue-400'}"></i>
+                        <span>${escapeHtml(title)}</span>
+                    </div>
+
+                    <div class="absolute top-2 right-2 z-20 flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onclick="toggleFullscreen('video-card-${id}')" class="p-1.5 bg-slate-900/80 hover:bg-slate-800 text-slate-300 rounded-md text-xs border border-slate-700">
+                            <i class="fa-solid fa-expand"></i>
+                        </button>
+                    </div>
+
+                    <!-- Video Element Container -->
+                    <div class="video-container relative flex-1 w-full h-full">
+                        <video id="video-el-${id}" autoplay playsinline ${isSelf ? 'muted' : ''}></video>
+                        <!-- Interactive Screen Click Overlay -->
+                        <div id="interactive-overlay-${id}" onclick="handleOverlayClick(event, '${id}')" class="absolute inset-0 cursor-pointer z-10"></div>
+                    </div>
+                `;
+
+                grid.appendChild(card);
+            }
+
+            const videoEl = document.getElementById(`video-el-${id}`);
+            videoEl.srcObject = stream;
+        }
+
+        function removePeerMedia(id) {
+            const card = document.getElementById(`video-card-${id}`);
+            if (card) card.remove();
+
+            const grid = document.getElementById('media-grid');
+            if (grid.children.length === 0) {
+                document.getElementById('media-grid-container').classList.add('hidden');
+            }
+        }
+
+        function toggleFullscreen(cardId) {
+            const card = document.getElementById(cardId);
+            if (!document.fullscreenElement) {
+                card.requestFullscreen().catch(err => {
+                    card.classList.toggle('video-card-fullscreen');
+                });
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // INTERACTIVE SCREEN CLICK BEACON TRANSMISSION
+        function handleOverlayClick(event, targetId) {
+            const overlay = event.currentTarget;
+            const rect = overlay.getBoundingClientRect();
+
+            // Calculate relative X/Y percentages (0.0 to 1.0)
+            const clickX = (event.clientX - rect.left) / rect.width;
+            const clickY = (event.clientY - rect.top) / rect.height;
+
+            const clickData = {
+                type: 'REMOTE_CLICK',
+                targetId: targetId,
+                x: clickX,
+                y: clickY,
+                user: currentUser
+            };
+
+            // Render click beacon locally
+            showClickBeaconOnOverlay(overlay, event.clientX - rect.left, event.clientY - rect.top, currentUser.name);
+
+            // Broadcast click beacon to mesh
+            broadcastData(clickData);
+        }
+
+        function handleRemoteClickBeacon(data) {
+            // Find screen card matching target
+            const overlay = document.getElementById(`interactive-overlay-${data.targetId}`);
+            if (overlay) {
+                const rect = overlay.getBoundingClientRect();
+                const pixelX = data.x * rect.width;
+                const pixelY = data.y * rect.height;
+                showClickBeaconOnOverlay(overlay, pixelX, pixelY, data.user.name);
+            }
+
+            // Also record beacon for PiP canvas overlay
+            activeClickBeacons.push({
+                x: data.x,
+                y: data.y,
+                name: data.user.name,
+                time: Date.now()
+            });
+        }
+
+        function showClickBeaconOnOverlay(container, posX, posY, name) {
+            const beacon = document.createElement('div');
+            beacon.className = "absolute pointer-events-none z-30 transform -translate-x-1/2 -translate-y-1/2 flex flex-col items-center";
+            beacon.style.left = posX + 'px';
+            beacon.style.top = posY + 'px';
+
+            beacon.innerHTML = `
+                <div class="w-8 h-8 rounded-full border-2 border-purple-400 bg-purple-500/30 animate-click-ripple"></div>
+                <div class="bg-purple-900/90 text-purple-100 text-[10px] font-bold px-2 py-0.5 rounded shadow border border-purple-400/50 whitespace-nowrap -mt-2">
+                    ${escapeHtml(name)} CLICKED
+                </div>
+            `;
+
+            container.appendChild(beacon);
+            setTimeout(() => beacon.remove(), 1000);
+        }
+
+        // FLOATING PIP ASSISTANT OVERLAY
+        async function launchPipOverlay() {
+            if (!screenStream) {
+                alert('Start screen share first.');
+                return;
+            }
+
+            pipCanvasEl = document.getElementById('pip-canvas');
+            pipCtx = pipCanvasEl.getContext('2d');
+            pipVideoEl = document.getElementById('pip-video-source');
+            pipVideoEl.srcObject = screenStream;
+
+            // Start Canvas Render Loop
+            requestAnimationFrame(renderPipCanvasFrame);
+
+            try {
+                // Capture canvas stream and request Document Picture-in-Picture or Video PiP
+                const canvasStream = pipCanvasEl.captureStream(30);
+                const pipDummyVideo = document.createElement('video');
+                pipDummyVideo.srcObject = canvasStream;
+                pipDummyVideo.muted = true;
+                await pipDummyVideo.play();
+                await pipDummyVideo.requestPictureInPicture();
+            } catch (err) {
+                alert('Picture-in-Picture failed: ' + err.message);
+            }
+        }
+
+        function renderPipCanvasFrame() {
+            if (!pipCtx || !pipVideoEl) return;
+
+            // Draw current screen share frame
+            pipCtx.drawImage(pipVideoEl, 0, 0, pipCanvasEl.width, pipCanvasEl.height);
+
+            // Draw active remote click beacons
+            const now = Date.now();
+            activeClickBeacons = activeClickBeacons.filter(b => now - b.time < 1500);
+
+            activeClickBeacons.forEach(b => {
+                const px = b.x * pipCanvasEl.width;
+                const py = b.y * pipCanvasEl.height;
+
+                // Target Circle Ring
+                pipCtx.beginPath();
+                pipCtx.arc(px, py, 24, 0, 2 * Math.PI);
+                pipCtx.strokeStyle = '#c084fc';
+                pipCtx.lineWidth = 4;
+                pipCtx.stroke();
+
+                // Crosshair Dot
+                pipCtx.beginPath();
+                pipCtx.arc(px, py, 6, 0, 2 * Math.PI);
+                pipCtx.fillStyle = '#f43f5e';
+                pipCtx.fill();
+
+                // User Tag Banner
+                pipCtx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+                pipCtx.fillRect(px - 60, py + 30, 120, 24);
+                pipCtx.strokeStyle = '#a855f7';
+                pipCtx.lineWidth = 1;
+                pipCtx.strokeRect(px - 60, py + 30, 120, 24);
+
+                pipCtx.fillStyle = '#ffffff';
+                pipCtx.font = 'bold 12px sans-serif';
+                pipCtx.textAlign = 'center';
+                pipCtx.fillText(`${b.name} CLICK`, px, py + 46);
+            });
+
+            if (isScreenActive) {
+                requestAnimationFrame(renderPipCanvasFrame);
+            }
+        }
+
+        // PROFILE EDIT MODAL
+        function toggleProfileModal() {
+            const modal = document.getElementById('profile-modal');
+            document.getElementById('username-input').value = currentUser.name;
+            modal.classList.toggle('hidden');
+        }
+
+        function setupColorPicker() {
+            const container = document.getElementById('color-picker-container');
+            container.innerHTML = '';
+            AVATAR_COLORS.forEach(color => {
+                const badge = document.createElement('button');
+                badge.className = "w-8 h-8 rounded-full border-2 border-transparent hover:scale-110 transition";
+                badge.style.backgroundColor = color;
+                badge.onclick = () => {
+                    currentUser.color = color;
+                    setupColorPicker();
+                };
+                if (currentUser.color === color) {
+                    badge.classList.add('border-white', 'ring-2', 'ring-blue-500');
+                }
+                container.appendChild(badge);
+            });
+        }
+
+        function saveProfile() {
+            const nameInput = document.getElementById('username-input').value.trim();
+            if (nameInput) currentUser.name = nameInput;
+            toggleProfileModal();
+
+            // Broadcast profile update
+            broadcastData({
+                type: 'PROFILE_INFO',
+                user: currentUser
+            });
+        }
+
+        // UTILITY FUNCTIONS
+        function escapeHtml(str) {
+            return String(str).replace(/[&<>"']/g, function(m) {
+                return {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#039;'
+                }[m];
+            });
+        }
+    </script>
+</body>
+</html>
